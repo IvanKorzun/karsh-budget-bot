@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: karsh_bot
+    restart: always
+    volumes:
+      # Пробрасываем файл базы данных, чтобы балансы сохранялись после перезагрузки
+      - ./karsh.db:/app/karsh.db
+    env_file:
+      - .env
+    # Это гарантирует, что база данных будет создана с правильными правами
+    user: "${UID:-1000}:${GID:-1000}"
