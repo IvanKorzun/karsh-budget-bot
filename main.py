@@ -9,12 +9,12 @@ import database as db
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 1893245583
+ADMIN_ID = 1893245583  # Твой ID
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Оперативная память бота
+# Хранилище в оперативной памяти
 poll_results = {}  # {user_id: {"name": "First Name", "username": "username"}}
 current_crew = {}  # {admin_id: ["Имя1", "Имя2"]}
 
@@ -35,7 +35,7 @@ def clean_uname(uname: str):
     return uname.replace("@", "").strip().lower()
 
 
-# --- СТАТУС (Для всех + Огонь) ---
+# --- СТАТУС ---
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     await set_reaction(message, "🔥")
@@ -43,7 +43,7 @@ async def cmd_status(message: types.Message):
     text = "БУХАЛ ТЕР ПАБЛИКА \"КАРШУЮДЛЯДУШИ\" 🟢\n📊 <b>Балансы:</b>\n───────────────────\n"
     for name, tg, bal in users:
         emoji = "🟢" if bal >= 0 else "🔴" if bal <= -2.6 else "⚪"
-        text += f"{emoji} <b>{name}</b>: {bal:.2f} BYN" + (" (можно не платить)" if emoji == "⚪" else "") + "\n"
+        text += f"{emoji} <b>{name}</b>: {bal:.2f} BYN" + (" (до 2.6 можно не платить)" if emoji == "⚪" else "") + "\n"
     await message.answer(text, parse_mode="HTML")
 
 
@@ -121,8 +121,7 @@ async def cmd_start_trip(message: types.Message):
         elif v_n in db_names:
             auto_selected.append(v_n)
     current_crew[message.from_user.id] = list(set(auto_selected))
-    await message.answer("🛠 <b>Экипаж:</b>\n<code>/reg Имя Юзернейм</code>",
-                         reply_markup=get_crew_keyboard(auto_selected), parse_mode="HTML")
+    await message.answer("🛠 <b>Сбор экипажа:</b>", reply_markup=get_crew_keyboard(auto_selected), parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "refresh_crew")
@@ -150,10 +149,11 @@ async def handle_toggle(callback: types.CallbackQuery):
 async def handle_drive(callback: types.CallbackQuery):
     sel = current_crew.get(callback.from_user.id, [])
     if not sel: return await callback.answer("Выбери людей!", show_alert=True)
-    await callback.message.edit_text(f"🛣 <b>Поехали!</b>\n{', '.join(sel)}\n\n/end [сумма]", parse_mode="HTML")
+    await callback.message.edit_text(f"🛣 <b>Поехали!</b>\nЭкипаж: {', '.join(sel)}\n\nЖду /end [сумма]",
+                                     parse_mode="HTML")
 
 
-# --- КОНЕЦ ПОЕЗДКИ (Исправлено) ---
+# --- КОНЕЦ ПОЕЗДКИ ---
 @dp.message(Command("end"))
 async def cmd_end(message: types.Message, command: CommandObject):
     if not is_admin(message.from_user.id):
@@ -165,21 +165,32 @@ async def cmd_end(message: types.Message, command: CommandObject):
         await message.reply("⚠️ <b>Нет активной поездки!</b>\nНажми 'ПОЕХАЛИ' в меню /start_trip", parse_mode="HTML")
         return
 
+    # Получаем аргументы команды /end сумма
     if not command.args:
-        await message.reply("⚠️ <b>Введите сумму!</b>\nПример: <code>/end 4.45</code>", parse_mode="HTML")
+        await message.reply("⚠️ <b>Введи сумму!</b>\nПример: <code>/end 4.45</code>", parse_mode="HTML")
         return
 
     try:
-        total = float(command.args.replace(',', '.'))
+        # Убираем пробелы, меняем запятую на точку
+        raw_sum = command.args.strip().replace(',', '.')
+        total = float(raw_sum)
+
+        # Считаем на всех (водитель + пассажиры)
         count = len(sel) + 1
         share = round(total / count, 2)
-        for name in sel: db.update_balance(name, -share)
+
+        for name in sel:
+            db.update_balance(name, -share)
+
         await message.answer(f"💰 Сумма: {total:.2f} BYN\n💳 С каждого (на {count} чел.): <b>{share:.2f} BYN</b>",
                              parse_mode="HTML")
-        current_crew.pop(message.from_user.id, None);
+
+        # Очистка памяти
+        current_crew.pop(message.from_user.id, None)
         poll_results.clear()
+
     except ValueError:
-        await message.reply("❌ <b>Ошибка!</b>\nСумма должна быть числом.", parse_mode="HTML")
+        await message.reply("❌ <b>Ошибка!</b>\nСумма должна быть числом (например, 4.45)", parse_mode="HTML")
 
 
 # --- ОСТАЛЬНЫЕ КОМАНДЫ ---
@@ -204,8 +215,9 @@ async def cmd_pay(message: types.Message):
         return
     try:
         args = message.text.split()
-        db.update_balance(args[1], float(args[2].replace(',', '.')))
-        await message.answer(f"✅ {args[1]}: +{args[2]} BYN")
+        val = float(args[2].replace(',', '.'))
+        db.update_balance(args[1], val)
+        await message.answer(f"✅ {args[1]}: +{val:.2f} BYN")
     except:
         await message.reply("Формат: /pay Имя 10.5")
 
