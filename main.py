@@ -14,7 +14,7 @@ ADMIN_ID = 1893245583  # Твой ID
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Глобальные переменные
+# Глобальные переменные (хранятся в оперативной памяти)
 poll_results = {}  # {user_id: {"name": "First Name", "username": "username"}}
 current_crew = {}  # {admin_id: ["Имя1", "Имя2"]}
 
@@ -40,7 +40,9 @@ def clean_uname(uname: str):
 # --- ЛОГИКА ОПРОСА ---
 def get_poll_text():
     going = [v["name"] for v in poll_results.values()]
-    return f"🚗 <b>Сборы на катку!</b>\n\n✅ <b>Едут:</b> " + (", ".join(going) if going else "...")
+    text = "🚗 <b>Сборы на катку!</b>\n\n"
+    text += f"✅ <b>Едут:</b> " + (", ".join(going) if going else "...")
+    return text
 
 
 @dp.message(Command("poll"))
@@ -87,15 +89,16 @@ def get_crew_keyboard(selected_names):
     db_names = [u[0] for u in db_users]
     db_unames_map = {clean_uname(u[1]): u[0] for u in db_users if u[1]}
 
-    # Кнопки базы
+    # Кнопки из базы
     for name, uname, bal in db_users:
         prefix = "✅ " if name in selected_names else "⬜ "
         builder.button(text=f"{prefix}{name}", callback_data=f"crew_{name}")
 
-    # Кнопки для регистрации новых
+    # Кнопки быстрой регистрации (если кого-то нет в БД)
     for val in poll_results.values():
-        if clean_uname(val["username"]) not in db_unames_map and val["name"] not in db_names:
-            builder.button(text=f"➕ Регнуть {val['name']}", callback_data=f"hreg_{val['name']}")
+        v_un, v_n = clean_uname(val["username"]), val["name"]
+        if v_un not in db_unames_map and v_n not in db_names:
+            builder.button(text=f"➕ Регнуть {v_n}", callback_data=f"hreg_{v_n}")
 
     builder.button(text="🔄 Обновить", callback_data="refresh_crew")
     builder.button(text="🚀 ПОЕХАЛИ!", callback_data="start_drive")
@@ -123,7 +126,7 @@ async def cmd_start_trip(message: types.Message):
             auto_selected.append(v_n)
 
     current_crew[message.from_user.id] = list(set(auto_selected))
-    await message.answer("🛠 <b>Экипаж:</b>\n<code>/reg Имя Юзернейм</code>",
+    await message.answer("🛠 <b>Сбор экипажа</b>\n<code>/reg Имя Юзернейм</code>",
                          reply_markup=get_crew_keyboard(auto_selected), parse_mode="HTML")
 
 
@@ -149,6 +152,7 @@ async def cmd_reg(message: types.Message):
     args = message.text.split()
     if len(args) < 2: return
     new_n = args[1]
+    if new_n.lower() in ["ban4e$hka", "водитель"]: return
     ref_u = clean_uname(args[2]) if len(args) > 2 else clean_uname(new_n)
     db.add_or_update_user(new_n, ref_u)
     if message.from_user.id in current_crew:
@@ -172,6 +176,7 @@ async def handle_toggle(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "start_drive")
 async def handle_drive(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id): return
     sel = current_crew.get(callback.from_user.id, [])
     if not sel: return await callback.answer("Выбери людей!", show_alert=True)
     await callback.message.edit_text(f"🛣 <b>Поехали!</b>\n{', '.join(sel)}\n\n/end [сумма]", parse_mode="HTML")
@@ -183,19 +188,28 @@ async def cmd_end(message: types.Message):
         await set_reaction(message, "🤡")
         return
     sel = current_crew.get(message.from_user.id)
-    if not sel: return
+    if not sel:
+        await message.reply("⚠️ <b>Нет активной поездки!</b>\nСначала выбери людей через /start_trip",
+                            parse_mode="HTML")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("⚠️ <b>Введите сумму!</b>\nПример: <code>/end 12.5</code>", parse_mode="HTML")
+        return
     try:
-        total = float(message.text.split()[1].replace(',', '.'))
-        share = round(total / (len(sel) + 1), 2)
+        total = float(args[1].replace(',', '.'))
+        count = len(sel) + 1
+        share = round(total / count, 2)
         for name in sel: db.update_balance(name, -share)
-        await message.answer(f"💰 Сумма: {total:.2f} BYN\n💳 С каждого: <b>{share:.2f} BYN</b>")
-        current_crew.pop(message.from_user.id);
+        await message.answer(f"💰 Сумма: {total:.2f} BYN\n💳 С каждого (на {count} чел.): <b>{share:.2f} BYN</b>",
+                             parse_mode="HTML")
+        current_crew.pop(message.from_user.id, None)
         poll_results.clear()
-    except:
-        await message.reply("Введи сумму.")
+    except ValueError:
+        await message.reply("❌ <b>Ошибка!</b>\nСумма должна быть числом.", parse_mode="HTML")
 
 
-# --- УПРАВЛЕНИЕ БД ---
+# --- УПРАВЛЕНИЕ БД (/db) ---
 @dp.message(Command("db"))
 async def cmd_db(message: types.Message):
     if not is_admin(message.from_user.id):
@@ -229,7 +243,7 @@ async def db_confirm(callback: types.CallbackQuery):
 
 
 @dp.callback_query(F.data == "db_list")
-async def db_list(callback: types.CallbackQuery):
+async def db_show_list(callback: types.CallbackQuery):
     users = db.get_all_users()
     text = "📋 <b>В базе:</b>\n" + "\n".join([f"• {u[0]}" for u in users])
     await callback.message.answer(text);
@@ -237,7 +251,7 @@ async def db_list(callback: types.CallbackQuery):
 
 
 @dp.callback_query(F.data == "db_add")
-async def db_add(callback: types.CallbackQuery):
+async def db_add_hint(callback: types.CallbackQuery):
     await callback.message.answer("Команда: /reg Имя Юзернейм");
     await callback.answer()
 
@@ -248,7 +262,7 @@ async def db_back(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# --- СТАТУС ---
+# --- ОБЩИЕ КОМАНДЫ ---
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     await set_reaction(message, "🔥")
@@ -267,12 +281,11 @@ async def cmd_pay(message: types.Message):
         return
     try:
         args = message.text.split()
-        name = args[1]
-        amount = float(args[2].replace(',', '.'))
+        name, amount = args[1], float(args[2].replace(',', '.'))
         db.update_balance(name, amount)
         await message.answer(f"✅ {name}: +{amount:.2f} BYN")
     except:
-        await message.reply("Формат: /pay Имя 10,5")
+        await message.reply("Формат: /pay Имя 10.5")
 
 
 @dp.callback_query(F.data == "cancel_trip")
